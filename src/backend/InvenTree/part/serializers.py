@@ -615,6 +615,10 @@ class PartSerializer(
             'testable',
             'trackable',
             'units',
+            'length',
+            'width',
+            'height',
+            'volume',
             'variant_of',
             'virtual',
             'pricing_min',
@@ -637,14 +641,43 @@ class PartSerializer(
             'external_stock',
             'unallocated_stock',
             'variant_stock',
+            'internal_price',
+            'sale_price',
+            'stock_cost',
+            'unrealized_value',
+            'markup_fy',
+            'markup_prior_fy',
+            'manufacturer_names',
             # Fields only used for Part creation
             'duplicate',
             'initial_stock',
             'initial_supplier',
+            'initial_internal_price',
             'copy_category_parameters',
             'tags',
         ]
         read_only_fields = ['barcode_hash', 'creation_date', 'creation_user']
+
+    manufacturer_names = serializers.SerializerMethodField(read_only=True)
+
+    def get_manufacturer_names(self, obj):
+        """Return comma-separated list of manufacturer names and MPNs.
+
+        Includes both direct ManufacturerPart links and indirect
+        links through SupplierPart → ManufacturerPart.
+        """
+        names = set()
+
+        for mp in obj.manufacturer_parts.all():
+            if mp.manufacturer:
+                names.add(f'{mp.manufacturer.name} ({mp.MPN})')
+
+        for sp in obj.supplier_parts.all():
+            mp = sp.manufacturer_part
+            if mp and mp.manufacturer:
+                names.add(f'{mp.manufacturer.name} ({mp.MPN})')
+
+        return ', '.join(sorted(names))
 
     def __init__(self, *args, **kwargs):
         """Custom initialization method for PartSerializer.
@@ -678,6 +711,7 @@ class PartSerializer(
             'duplicate',
             'initial_stock',
             'initial_supplier',
+            'initial_internal_price',
             'copy_category_parameters',
             'existing_image',
         ]
@@ -690,6 +724,12 @@ class PartSerializer(
 
         Performing database queries as efficiently as possible, to reduce database trips.
         """
+        # Prefetch manufacturer / supplier parts for the manufacturer_names field
+        queryset = queryset.prefetch_related(
+            'manufacturer_parts__manufacturer',
+            'supplier_parts__manufacturer_part__manufacturer',
+        )
+
         # Annotate with the total number of revisions
         queryset = queryset.annotate(revision_count=SubqueryCount('revisions'))
 
@@ -760,6 +800,48 @@ class PartSerializer(
             category_default_location=part_filters.annotate_default_location(
                 'category__'
             )
+        )
+
+        # Annotate with unit prices (from PartPricing cache)
+        queryset = queryset.annotate(
+            internal_price=part_filters.annotate_internal_price(),
+            sale_price=part_filters.annotate_sale_price(),
+        )
+
+        # Annotate with aggregate value columns
+        queryset = queryset.annotate(
+            stock_cost=part_filters.annotate_stock_cost(),
+            unrealized_value=part_filters.annotate_unrealized_value(),
+        )
+
+        # Annotate with FY-scoped markup percentages
+        fy_start, fy_end = part_filters._get_fiscal_year_bounds(offset=0)
+        prior_fy_start, prior_fy_end = part_filters._get_fiscal_year_bounds(offset=-1)
+
+        queryset = queryset.annotate(
+            fy_po_price=part_filters._annotate_latest_po_price_for_period(
+                fy_start, fy_end
+            ),
+            prior_fy_po_price=part_filters._annotate_latest_po_price_for_period(
+                prior_fy_start, prior_fy_end
+            ),
+        )
+
+        # Annotate FY sale prices
+        queryset = queryset.annotate(
+            sale_price_fy=F('pricing_data__sale_price_min'),
+            sale_price_prior_fy=part_filters._annotate_latest_so_price_for_period(
+                prior_fy_start, prior_fy_end
+            ),
+        )
+
+        queryset = queryset.annotate(
+            markup_fy=part_filters._annotate_markup_for_period(
+                'fy_po_price', 'sale_price_fy'
+            ),
+            markup_prior_fy=part_filters._annotate_markup_for_period(
+                'prior_fy_po_price', 'sale_price_prior_fy'
+            ),
         )
 
         return queryset
@@ -898,6 +980,54 @@ class PartSerializer(
         read_only=True, allow_null=True, label=_('Variant Stock')
     )
 
+    internal_price = serializers.DecimalField(
+        max_digits=19,
+        decimal_places=6,
+        read_only=True,
+        allow_null=True,
+        label=_('Internal Price'),
+    )
+
+    unrealized_value = serializers.DecimalField(
+        max_digits=19,
+        decimal_places=6,
+        read_only=True,
+        allow_null=True,
+        label=_('Retail Value'),
+    )
+
+    sale_price = serializers.DecimalField(
+        max_digits=19,
+        decimal_places=6,
+        read_only=True,
+        allow_null=True,
+        label=_('Sale Price'),
+    )
+
+    stock_cost = serializers.DecimalField(
+        max_digits=19,
+        decimal_places=6,
+        read_only=True,
+        allow_null=True,
+        label=_('Stock Cost'),
+    )
+
+    markup_fy = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+        label=_('Markup (Current)'),
+    )
+
+    markup_prior_fy = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+        label=_('Markup (Prior Fiscal Year)'),
+    )
+
     minimum_stock = serializers.FloatField(
         required=False, label=_('Minimum Stock'), default=0
     )
@@ -990,6 +1120,16 @@ class PartSerializer(
         required=False,
     )
 
+    initial_internal_price = serializers.DecimalField(
+        max_digits=19,
+        decimal_places=6,
+        required=False,
+        write_only=True,
+        allow_null=True,
+        label=_('Initial Internal Price'),
+        help_text=_('Set an initial internal price for this part (quantity=1)'),
+    )
+
     copy_category_parameters = serializers.BooleanField(
         default=True,
         required=False,
@@ -1028,6 +1168,7 @@ class PartSerializer(
         duplicate = validated_data.pop('duplicate', None)
         initial_stock = validated_data.pop('initial_stock', None)
         initial_supplier = validated_data.pop('initial_supplier', None)
+        initial_internal_price = validated_data.pop('initial_internal_price', None)
         copy_category_parameters = validated_data.pop('copy_category_parameters', False)
 
         instance = super().create(validated_data)
@@ -1098,6 +1239,14 @@ class PartSerializer(
                     SKU=sku,
                     manufacturer_part=manufacturer_part,
                 )
+
+        # Create initial internal price break
+        if initial_internal_price is not None:
+            PartInternalPriceBreak.objects.create(
+                part=instance, quantity=1, price=initial_internal_price
+            )
+            # Refresh the pricing cache (uses the property that auto-creates PartPricing)
+            instance.pricing.update_pricing()
 
         return instance
 

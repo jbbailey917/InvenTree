@@ -13,6 +13,7 @@ from rest_framework import serializers
 from rest_framework.response import Response
 
 import common.serializers
+import company.models
 import part.tasks as part_tasks
 from data_exporter.mixins import DataExportViewMixin
 from InvenTree.api import (
@@ -356,6 +357,17 @@ class PartSalePriceDetail(RetrieveUpdateDestroyAPI):
     queryset = PartSellPriceBreak.objects.all()
     serializer_class = part_serializers.PartSalePriceSerializer
 
+    def perform_update(self, serializer):
+        """Update the sale price break and refresh the pricing cache."""
+        instance = serializer.save()
+        instance.part.update_pricing()
+
+    def perform_destroy(self, instance):
+        """Delete the sale price break and refresh the pricing cache."""
+        part = instance.part
+        instance.delete()
+        part.update_pricing()
+
 
 class PartSalePriceList(DataExportViewMixin, ListCreateAPI):
     """API endpoint for list view of PartSalePriceBreak model."""
@@ -368,12 +380,28 @@ class PartSalePriceList(DataExportViewMixin, ListCreateAPI):
     ordering_fields = ['quantity', 'price']
     ordering = 'quantity'
 
+    def perform_create(self, serializer):
+        """Create a new sale price break and refresh the pricing cache."""
+        instance = serializer.save()
+        instance.part.update_pricing()
+
 
 class PartInternalPriceDetail(RetrieveUpdateDestroyAPI):
     """Detail endpoint for PartInternalPriceBreak model."""
 
     queryset = PartInternalPriceBreak.objects.all()
     serializer_class = part_serializers.PartInternalPriceSerializer
+
+    def perform_update(self, serializer):
+        """Update the price break and refresh the pricing cache."""
+        instance = serializer.save()
+        instance.part.update_pricing()
+
+    def perform_destroy(self, instance):
+        """Delete the price break and refresh the pricing cache."""
+        part = instance.part
+        instance.delete()
+        part.update_pricing()
 
 
 class PartInternalPriceList(DataExportViewMixin, ListCreateAPI):
@@ -387,6 +415,11 @@ class PartInternalPriceList(DataExportViewMixin, ListCreateAPI):
     filterset_fields = ['part']
     ordering_fields = ['quantity', 'price']
     ordering = 'quantity'
+
+    def perform_create(self, serializer):
+        """Create a new price break and refresh the pricing cache."""
+        instance = serializer.save()
+        instance.part.update_pricing()
 
 
 class PartTestTemplateFilter(FilterSet):
@@ -907,6 +940,20 @@ class PartFilter(FilterSet):
 
     virtual = rest_filters.BooleanFilter()
 
+    manufacturer = rest_filters.ModelChoiceFilter(
+        queryset=company.models.Company.objects.filter(is_manufacturer=True),
+        method='filter_manufacturer',
+        label=_('Manufacturer'),
+        help_text=_('Filter parts by manufacturer (direct or via supplier)'),
+    )
+
+    def filter_manufacturer(self, queryset, name, value):
+        """Filter parts linked to a manufacturer directly or through a supplier part."""
+        return queryset.filter(
+            Q(manufacturer_parts__manufacturer=value)
+            | Q(supplier_parts__manufacturer_part__manufacturer=value)
+        ).distinct()
+
     tags_name = rest_filters.CharFilter(field_name='tags__name', lookup_expr='iexact')
 
     tags_slug = rest_filters.CharFilter(field_name='tags__slug', lookup_expr='iexact')
@@ -1087,6 +1134,12 @@ class PartList(
         'pricing_min',
         'pricing_max',
         'pricing_updated',
+        'internal_price',
+        'sale_price',
+        'stock_cost',
+        'unrealized_value',
+        'markup_fy',
+        'markup_prior_fy',
         'revision',
         'revision_count',
     ]

@@ -24,7 +24,11 @@ import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { ActionDropdown } from '../../components/items/ActionDropdown';
 import ImportPartWizard from '../../components/wizards/ImportPartWizard';
 import OrderPartsWizard from '../../components/wizards/OrderPartsWizard';
-import { formatDecimal, formatPriceRange } from '../../defaults/formatters';
+import {
+  formatCurrency,
+  formatDecimal,
+  formatPriceRange
+} from '../../defaults/formatters';
 import { dataImporterSessionFields } from '../../forms/ImporterForms';
 import { usePartFields } from '../../forms/PartForms';
 import { InvenTreeIcon } from '../../functions/icons';
@@ -68,6 +72,34 @@ function partTableColumns(): TableColumn[] {
       accessor: 'units',
       sortable: true,
       copyable: true
+    },
+    {
+      accessor: 'length',
+      title: t`Length (m)`,
+      sortable: true,
+      defaultVisible: false
+    },
+    {
+      accessor: 'width',
+      title: t`Width (m)`,
+      sortable: true,
+      defaultVisible: false
+    },
+    {
+      accessor: 'height',
+      title: t`Height (m)`,
+      sortable: true,
+      defaultVisible: false
+    },
+    {
+      accessor: 'volume',
+      title: t`Volume (m³)`,
+      sortable: true,
+      defaultVisible: false,
+      render: (record: any) => {
+        if (record.volume == null) return '—';
+        return Number(record.volume).toExponential(4);
+      }
     },
     DescriptionColumn({}),
     CategoryColumn({
@@ -193,6 +225,55 @@ function partTableColumns(): TableColumn[] {
       }
     },
     {
+      accessor: 'sale_price',
+      title: t`Sale Price`,
+      sortable: true,
+      defaultVisible: false,
+      render: (record: any) => {
+        if (record.sale_price == null) return '-';
+        return formatCurrency(record.sale_price);
+      }
+    },
+    {
+      accessor: 'unrealized_value',
+      title: t`Retail Value`,
+      sortable: true,
+      render: (record: any) => {
+        if (record.unrealized_value == null) return '-';
+        return formatCurrency(record.unrealized_value);
+      }
+    },
+    {
+      accessor: 'markup_fy',
+      title: t`Markup (Current)`,
+      sortable: true,
+      defaultVisible: false,
+      render: (record: any) => {
+        if (record.markup_fy == null) return '-';
+        return `${Number(record.markup_fy).toFixed(1)}%`;
+      }
+    },
+    {
+      accessor: 'markup_prior_fy',
+      title: t`Markup (Prior Fiscal Year)`,
+      sortable: true,
+      defaultVisible: false,
+      render: (record: any) => {
+        if (record.markup_prior_fy == null) return '-';
+        return `${Number(record.markup_prior_fy).toFixed(1)}%`;
+      }
+    },
+    {
+      accessor: 'stock_cost',
+      title: t`Stock Cost`,
+      sortable: true,
+      defaultVisible: false,
+      render: (record: any) => {
+        if (record.stock_cost == null) return '-';
+        return formatCurrency(record.stock_cost);
+      }
+    },
+    {
       accessor: 'price_range',
       title: t`Price Range`,
       sortable: true,
@@ -200,6 +281,18 @@ function partTableColumns(): TableColumn[] {
       defaultVisible: false,
       render: (record: any) =>
         formatPriceRange(record.pricing_min, record.pricing_max)
+    },
+    {
+      accessor: 'manufacturer_names',
+      title: t`Manufacturer`,
+      sortable: false,
+      defaultVisible: true,
+      render: (record: any) => {
+        if (!record.manufacturer_names) {
+          return '—';
+        }
+        return record.manufacturer_names;
+      }
     },
     LinkColumn({})
   ];
@@ -345,6 +438,16 @@ function partTableFilters(): TableFilter[] {
       label: t`Subscribed`,
       description: t`Filter by parts to which the user is subscribed`,
       type: 'boolean'
+    },
+    {
+      name: 'manufacturer',
+      label: t`Manufacturer`,
+      description: t`Filter parts by manufacturer`,
+      type: 'api',
+      apiUrl: apiUrl(ApiEndpoints.company_list),
+      apiFilter: { is_manufacturer: true },
+      model: ModelType.company,
+      modelRenderer: (instance: any) => instance?.name || String(instance)
     }
   ];
 }

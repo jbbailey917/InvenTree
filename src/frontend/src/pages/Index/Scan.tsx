@@ -3,6 +3,7 @@ import { Trans } from '@lingui/react/macro';
 import {
   ActionIcon,
   Alert,
+  Button,
   Divider,
   Grid,
   Group,
@@ -14,15 +15,18 @@ import {
 import { randomId, useListState, useLocalStorage } from '@mantine/hooks';
 import {
   IconAlertCircle,
+  IconArrowMerge,
+  IconArrowRight,
   IconNumber,
-  IconQuestionMark
+  IconQuestionMark,
+  IconTruckDelivery
 } from '@tabler/icons-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { StylishText } from '@lib/components/StylishText';
 import { ApiEndpoints } from '@lib/enums/ApiEndpoints';
 import { ModelInformationDict } from '@lib/enums/ModelInformation';
-import type { ModelType } from '@lib/enums/ModelType';
+import { ModelType } from '@lib/enums/ModelType';
 import { apiUrl } from '@lib/functions/Api';
 import { notYetImplemented } from '@lib/functions/Notification';
 import { hideNotification, showNotification } from '@mantine/notifications';
@@ -30,6 +34,9 @@ import dayjs from 'dayjs';
 import { api } from '../../App';
 import { BarcodeInput } from '../../components/barcodes/BarcodeInput';
 import type { BarcodeScanItem } from '../../components/barcodes/BarcodeScanItem';
+import { ConsolidateStockBarcodeModal } from '../../components/barcodes/ConsolidateStockBarcodeModal';
+import { MoveStockBarcodeModal } from '../../components/barcodes/MoveStockBarcodeModal';
+import { ReceiveStockBarcodeModal } from '../../components/barcodes/ReceiveStockBarcodeModal';
 import PageTitle from '../../components/nav/PageTitle';
 import { showApiErrorMessage } from '../../functions/notifications';
 import BarcodeScanTable from '../../tables/general/BarcodeScanTable';
@@ -45,6 +52,11 @@ export default function Scan() {
   });
 
   const [selection, setSelection] = useState<string[]>([]);
+  const [moveModalOpen, setMoveModalOpen] = useState<boolean>(false);
+  const [receiveModalOpen, setReceiveModalOpen] = useState<boolean>(false);
+  const [consolidateModalOpen, setConsolidateModalOpen] =
+    useState<boolean>(false);
+  const [clearSelectionToken, setClearSelectionToken] = useState<number>(0);
 
   // Fetch model instance based on scan item
   const fetchInstance = useCallback(
@@ -68,8 +80,14 @@ export default function Scan() {
 
       const model_info = ModelInformationDict[item.model];
 
+      // Request location_detail for stock items (used by move action)
+      const params =
+        item.model === ModelType.stockitem
+          ? { location_detail: true, part_detail: true }
+          : {};
+
       api
-        .get(apiUrl(model_info.api_endpoint, item.pk))
+        .get(apiUrl(model_info.api_endpoint, item.pk), { params })
         .then((response) => {
           item.instance = response.data;
           historyHandlers.append(item);
@@ -149,6 +167,14 @@ export default function Scan() {
     return history.filter((item) => selection.includes(item.id));
   }, [selection, history]);
 
+  // Extract scanned stock locations from history (for move action)
+  const scannedLocations = useMemo(() => {
+    return history.filter(
+      (item) =>
+        item.model === ModelType.stocklocation && item.instance?.pk != null
+    );
+  }, [history]);
+
   // selected actions component
   const SelectedActions = useMemo(() => {
     const uniqueObjectTypes = new Set(selectedItems.map((item) => item.model));
@@ -169,23 +195,71 @@ export default function Scan() {
       );
     }
 
+    const modelType = [...uniqueObjectTypes][0];
+    const canMove =
+      modelType === ModelType.stockitem || modelType === ModelType.part;
+    const canReceive =
+      modelType === ModelType.part || modelType === ModelType.stockitem;
+
     return (
       <>
         <Text fz='sm' c='dimmed'>
           <Trans>Actions ... </Trans>
         </Text>
         <Group>
-          <ActionIcon
-            onClick={notYetImplemented}
-            title={t`Count`}
-            variant='default'
-          >
-            <IconNumber />
-          </ActionIcon>
+          {canMove && (
+            <Button
+              onClick={() => setMoveModalOpen(true)}
+              leftSection={<IconArrowRight size={16} />}
+              color='blue'
+            >
+              <Trans>Move Stock</Trans>
+            </Button>
+          )}
+          {canReceive && (
+            <Button
+              onClick={() => setReceiveModalOpen(true)}
+              leftSection={<IconTruckDelivery size={16} />}
+              color='green'
+            >
+              <Trans>Receive Stock</Trans>
+            </Button>
+          )}
+          {modelType === ModelType.stockitem && (
+            <Button
+              onClick={() => setConsolidateModalOpen(true)}
+              leftSection={<IconArrowMerge size={16} />}
+              color='orange'
+            >
+              <Trans>Consolidate Stock</Trans>
+            </Button>
+          )}
+          {modelType === ModelType.stockitem && (
+            <ActionIcon
+              onClick={notYetImplemented}
+              title={t`Count`}
+              variant='default'
+            >
+              <IconNumber />
+            </ActionIcon>
+          )}
         </Group>
       </>
     );
   }, [selectedItems]);
+
+  // Determine source and destination locations from scanned locations
+  const sourceLocationPk = useMemo(() => {
+    return scannedLocations.length > 0
+      ? scannedLocations[0].instance.pk
+      : undefined;
+  }, [scannedLocations]);
+
+  const destLocationPk = useMemo(() => {
+    return scannedLocations.length > 1
+      ? scannedLocations[1].instance.pk
+      : undefined;
+  }, [scannedLocations]);
 
   return (
     <>
@@ -246,11 +320,41 @@ export default function Scan() {
                   historyHandlers.setState(newHistory);
                   setHistoryStorage(newHistory);
                 }}
+                clearSelectionToken={clearSelectionToken}
               />
             </Stack>
           </Paper>
         </Grid.Col>
       </Grid>
+      <ConsolidateStockBarcodeModal
+        opened={consolidateModalOpen}
+        onClose={() => setConsolidateModalOpen(false)}
+        onSuccess={() => {
+          setSelection([]);
+          setClearSelectionToken((t) => t + 1);
+        }}
+        items={selectedItems}
+      />
+      <MoveStockBarcodeModal
+        opened={moveModalOpen}
+        onClose={() => setMoveModalOpen(false)}
+        onSuccess={() => {
+          setSelection([]);
+          setClearSelectionToken((t) => t + 1);
+        }}
+        items={selectedItems}
+        sourceLocationPk={sourceLocationPk}
+        destinationLocationPk={destLocationPk}
+      />
+      <ReceiveStockBarcodeModal
+        opened={receiveModalOpen}
+        onClose={() => setReceiveModalOpen(false)}
+        onSuccess={() => {
+          setSelection([]);
+          setClearSelectionToken((t) => t + 1);
+        }}
+        items={selectedItems}
+      />
     </>
   );
 }
