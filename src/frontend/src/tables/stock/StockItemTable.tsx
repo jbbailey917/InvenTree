@@ -109,12 +109,6 @@ function stockItemTableColumns({
       copyable: true
     },
     {
-      accessor: 'manufacturer_name',
-      title: t`Manufacturer`,
-      sortable: true,
-      defaultVisible: false
-    },
-    {
       accessor: 'purchase_price',
       title: t`Unit Price`,
       sortable: true,

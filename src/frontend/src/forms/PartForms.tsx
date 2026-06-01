@@ -49,10 +49,6 @@ export function usePartFields({
       },
       keywords: {},
       units: {},
-      length: {},
-      width: {},
-      height: {},
-      volume: {},
       link: {},
       default_location: {
         filters: {
@@ -144,10 +140,6 @@ export function usePartFields({
             mpn: {}
           }
         };
-      }
-
-      if (globalSettings.isSet('PART_INTERNAL_PRICE')) {
-        fields.initial_internal_price = {};
       }
     }
 
