@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inventree-bulk-scan"
+version = "0.1.0"
+description = "Bulk barcode scanning workflow with move, receive, and consolidate actions"
+authors = [{ name = "Jordan Bailey" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["inventree_bulk_scan*"]
+
+[project.entry-points."inventree_plugins"]
+bulk_scan = "inventree_bulk_scan.core:BulkScanPlugin"

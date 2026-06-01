@@ -49,7 +49,6 @@ from InvenTree.mixins import (
     SerializerContextMixin,
 )
 from order import models, serializers
-from order.pos_webhook import PosSalesWebhook
 from order.status_codes import (
     PurchaseOrderStatus,
     PurchaseOrderStatusGroups,
@@ -2217,8 +2216,6 @@ order_api_urls = [
             ),
         ]),
     ),
-    # API endpoint for POS sales webhook
-    path('pos-webhook/', PosSalesWebhook.as_view(), name='api-pos-webhook'),
     # API endpoint for subscribing to ICS calendar of purchase/sales/return orders
     re_path(
         r'^calendar/(?P<ordertype>purchase-order|sales-order|return-order)/calendar.ics',

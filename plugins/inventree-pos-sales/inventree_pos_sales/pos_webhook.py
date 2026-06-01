@@ -1,39 +1,52 @@
-"""POS sales webhook — orchestrates sales-order workflow from receipt data."""
+"""POS webhook endpoint and sales order orchestrator."""
 
+import time
 from decimal import Decimal
 from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 
+import django_q.models
 import requests
 import structlog
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 
-import common.settings
 import company.models as company_models
 import stock.models as stock_models
 from InvenTree.mixins import CreateAPI
 from order import models, serializers
 from order.status_codes import SalesOrderStatus, SalesOrderStatusGroups
 from part.models import Part
+from plugin.models import PluginConfig
+
+from . import serializers as plugin_serializers
 
 logger = structlog.get_logger('inventree')
 
 
-class PosSalesOrchestrator:
-    """Runs the sales-order workflow using InvenTree models and serializers.
+def _get_plugin_settings() -> dict:
+    """Retrieve settings from the POS Sales plugin config."""
+    cfg = PluginConfig.objects.filter(key='pos-sales', active=True).first()
+    if cfg is None:
+        return {}
+    return cfg.plugin_settings
 
-    Orchestrates the complete POS sale workflow from receipt data to completed shipment.
-    """
+
+class PosSalesOrchestrator:
+    """Runs the sales-order workflow using InvenTree models and serializers."""
 
     def __init__(self, user: User):
         """Initialize the orchestrator with a service user."""
         self.user = user
         self.request_context = {'request': _FakeRequest(user)}
+        settings = _get_plugin_settings()
+        self.receipt_api_endpoint = settings.get('RECEIPT_API_ENDPOINT', '')
+        self.receipt_api_key = settings.get('RECEIPT_API_KEY', '')
 
     def process_sale(self, receipt_id: str, location_id: str) -> models.SalesOrder:
         """End-to-end POS sale processing.
@@ -42,8 +55,6 @@ class PosSalesOrchestrator:
         fetch receipt → create order → lines → issue → shipment → allocate → check →
         complete shipment (async) → ship order → complete order.
         """
-        from django.db import transaction
-
         line_specs = self._parse_receipt_lines(receipt_id)
         customer = self._get_or_create_location_customer(location_id)
         stock_location = self._resolve_stock_location(location_id)
@@ -58,9 +69,6 @@ class PosSalesOrchestrator:
             )
             return sales_order
 
-        shipment: models.SalesOrderShipment
-
-        # DB steps that must commit before the background shipment task runs.
         with transaction.atomic():
             self._create_line_items(sales_order, line_specs)
             self._issue_order(sales_order)
@@ -81,7 +89,7 @@ class PosSalesOrchestrator:
         self, location_id: str
     ) -> company_models.Company:
         """Each POS location maps to a dedicated InvenTree customer company."""
-        prefix = 'POS Location'  # Can be made configurable
+        prefix = 'POS Location'
         name = f'{prefix} {location_id}'
 
         customer = company_models.Company.objects.filter(
@@ -98,7 +106,6 @@ class PosSalesOrchestrator:
             is_supplier=False,
             active=True,
         )
-
         logger.info(
             'Created POS customer', location_id=location_id, customer_pk=customer.pk
         )
@@ -106,15 +113,12 @@ class PosSalesOrchestrator:
 
     def _resolve_stock_location(self, location_id: str) -> stock_models.StockLocation:
         """Resolve external location_id to an InvenTree stock location."""
-        # Try exact location_id match
         try:
             return stock_models.StockLocation.objects.get(pk=location_id)
         except (stock_models.StockLocation.DoesNotExist, ValueError):
             pass
 
-        # Fallback: match by name
         location = stock_models.StockLocation.objects.filter(name=location_id).first()
-
         if location:
             return location
 
@@ -131,9 +135,7 @@ class PosSalesOrchestrator:
     ) -> models.SalesOrder:
         """Idempotent sales order keyed by POS receipt id."""
         reference = f'POS-{receipt_id}'
-
         existing = models.SalesOrder.objects.filter(reference=reference).first()
-
         if existing:
             return existing
 
@@ -146,26 +148,25 @@ class PosSalesOrchestrator:
 
     def _parse_receipt_lines(self, receipt_id: str) -> list[dict[str, Any]]:
         """Fetch and normalize itemized receipt data from the external POS API."""
-        endpoint = common.settings.get_global_setting(
-            'PA_RECEIPT_API_ENDPOINT', environment_key='PA_RECEIPT_API_ENDPOINT'
-        )
-        api_key = common.settings.get_global_setting(
-            'PA_RECEIPT_API_KEY', environment_key='PA_RECEIPT_API_KEY'
-        )
-
-        if not endpoint:
+        if not self.receipt_api_endpoint:
             raise ValueError(
                 _(
                     'POS receipt API endpoint is not configured. '
-                    'Set PA_RECEIPT_API_ENDPOINT in the environment or database.'
+                    'Set RECEIPT_API_ENDPOINT in the plugin settings.'
                 )
             )
 
-        headers = {'Accept': 'application/json', 'Authorization': f'Bearer {api_key}'}
+        headers = {
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {self.receipt_api_key}',
+        }
 
         try:
             response = requests.get(
-                endpoint, headers=headers, params={'receipt_id': receipt_id}, timeout=30
+                self.receipt_api_endpoint,
+                headers=headers,
+                params={'receipt_id': receipt_id},
+                timeout=30,
             )
             response.raise_for_status()
         except requests.exceptions.Timeout as exc:
@@ -192,7 +193,6 @@ class PosSalesOrchestrator:
             ) from exc
 
         lines = data.get('lines') or data.get('items') or data.get('line_items')
-
         if not lines:
             raise ValueError(
                 _('Receipt %(id)s contains no line items in the POS response')
@@ -203,9 +203,7 @@ class PosSalesOrchestrator:
         for entry in lines:
             if not isinstance(entry, dict):
                 continue
-
             quantity = entry.get('quantity') or entry.get('qty') or 0
-
             normalized.append({
                 'part_id': entry.get('part_id') or entry.get('partId'),
                 'sku': entry.get('sku') or entry.get('ipn') or entry.get('part_number'),
@@ -223,7 +221,6 @@ class PosSalesOrchestrator:
             receipt_id=receipt_id,
             line_count=len(normalized),
         )
-
         return normalized
 
     def _create_line_items(
@@ -231,15 +228,12 @@ class PosSalesOrchestrator:
     ) -> list[models.SalesOrderLineItem]:
         """Create sales order line items from receipt lines."""
         created: list[models.SalesOrderLineItem] = []
-
         for spec in line_specs:
             part = self._resolve_part(spec)
-
             if not part.salable:
                 raise ValueError(
                     _('Part %(part)s is not salable') % {'part': part.name}
                 )
-
             line = models.SalesOrderLineItem.objects.create(
                 order=sales_order,
                 part=part,
@@ -247,26 +241,20 @@ class PosSalesOrchestrator:
                 reference=spec.get('sku') or part.IPN,
             )
             created.append(line)
-
         return created
 
     def _resolve_part(self, spec: dict[str, Any]) -> Part:
         """Resolve a receipt line to an InvenTree Part."""
         if spec.get('part_id'):
             return Part.objects.get(pk=spec['part_id'])
-
         if spec.get('sku'):
             match = Part.objects.filter(IPN=spec['sku']).first()
-
             if match:
                 return match
-
         if spec.get('barcode'):
             item = stock_models.StockItem.lookup_barcode(spec['barcode'])
-
             if item:
                 return item.part
-
         raise ValueError(
             _('Could not resolve part for line: %(line)s') % {'line': spec}
         )
@@ -275,12 +263,11 @@ class PosSalesOrchestrator:
         """Issue the sales order (PENDING → IN_PROGRESS)."""
         if not sales_order.can_issue:
             return
-
-        serializer = serializers.SalesOrderIssueSerializer(
+        serializer_obj = serializers.SalesOrderIssueSerializer(
             data={}, context={**self.request_context, 'order': sales_order}
         )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        serializer_obj.is_valid(raise_exception=True)
+        serializer_obj.save()
 
     def _create_shipment(
         self, sales_order: models.SalesOrder, receipt_id: str
@@ -299,20 +286,17 @@ class PosSalesOrchestrator:
     ) -> None:
         """Allocate stock from the configured location for each line."""
         allocation_items = []
-
         locations = stock_location.get_descendants(include_self=True)
 
         for spec in line_specs:
             part = self._resolve_part(spec)
             line = sales_order.lines.filter(part=part).first()
-
             if not line:
                 raise ValueError(
                     _('No sales order line for part %(part)s') % {'part': part.pk}
                 )
 
             remaining = spec['quantity']
-
             stock_qs = stock_models.StockItem.objects.filter(
                 part=part, location__in=locations
             ).order_by('pk')
@@ -320,20 +304,15 @@ class PosSalesOrchestrator:
             for stock_item in stock_qs:
                 if remaining <= 0:
                     break
-
                 available = stock_item.unallocated_quantity()
-
                 if available <= 0:
                     continue
-
                 take = min(remaining, available)
-
                 allocation_items.append({
                     'line_item': line,
                     'stock_item': stock_item,
                     'quantity': take,
                 })
-
                 remaining -= take
 
             if remaining > 0:
@@ -353,7 +332,7 @@ class PosSalesOrchestrator:
         serializer_obj.save()
 
     def _check_shipment(self, shipment: models.SalesOrderShipment) -> None:
-        """Mark shipment as checked (required when SALESORDER_SHIPMENT_REQUIRES_CHECK)."""
+        """Mark shipment as checked."""
         shipment.checked_by = self.user
         shipment.save(update_fields=['checked_by'])
 
@@ -366,24 +345,17 @@ class PosSalesOrchestrator:
         self, task_id: str | bool | None, timeout_seconds: int = 120
     ) -> None:
         """Wait for django-q shipment completion task."""
-        import time
-
-        import django_q.models
-
         if task_id is None or isinstance(task_id, bool):
             return
 
         deadline = time.time() + timeout_seconds
-
         while time.time() < deadline:
             if django_q.models.Success.objects.filter(id=task_id).exists():
                 return
-
             if django_q.models.Failure.objects.filter(id=task_id).exists():
                 raise RuntimeError(
                     _('Background task %(task)s failed') % {'task': task_id}
                 )
-
             time.sleep(1)
 
         raise TimeoutError(
@@ -391,9 +363,8 @@ class PosSalesOrchestrator:
         )
 
     def _ship_sales_order(self, sales_order: models.SalesOrder) -> None:
-        """Mark sales order as shipped (InvenTree 'Complete Order' UI action)."""
+        """Mark sales order as shipped."""
         sales_order.refresh_from_db()
-
         if sales_order.status in SalesOrderStatusGroups.COMPLETE:
             return
 
@@ -407,32 +378,27 @@ class PosSalesOrchestrator:
     def _complete_sales_order(self, sales_order: models.SalesOrder) -> None:
         """Transition order to COMPLETE status when still open after shipping."""
         sales_order.refresh_from_db()
-
         if sales_order.status == SalesOrderStatus.COMPLETE.value:
             return
-
         if sales_order.status == SalesOrderStatus.SHIPPED.value:
             sales_order.complete_order(self.user)
 
 
-class _FakeRequest:
+class _FakeRequest:  # noqa: B903
     """Minimal request object for serializer context."""
 
     def __init__(self, user: User):
-        """Initialize with a user."""
         self.user = user
 
 
 class PosSalesWebhook(CreateAPI):
     """API endpoint for POS sales webhook.
 
-    Receives POS webhook events and orchestrates the sales order workflow.
-
-    POST /api/sales/pos-webhook/
+    POST /plugin/pos-sales/pos-webhook/
     """
 
     queryset = models.SalesOrder.objects.none()
-    serializer_class = serializers.PosWebhookInboundSerializer
+    serializer_class = plugin_serializers.PosWebhookInboundSerializer
 
     def create(self, request, *args, **kwargs):
         """Process incoming POS webhook and orchestrate sales order creation."""
@@ -474,7 +440,6 @@ class PosSalesWebhook(CreateAPI):
             'sales_order_reference': sales_order.reference,
             'message': _('POS sale processed successfully'),
         }
-
         return Response(payload, status=status.HTTP_201_CREATED)
 
     @staticmethod
@@ -492,10 +457,13 @@ class PosSalesWebhook(CreateAPI):
 
     @staticmethod
     def _get_service_user() -> User:
-        """Return the configured service account (defaults to 'admin')."""
+        """Return the configured service account."""
+        settings = _get_plugin_settings()
+        username = settings.get('SERVICE_USERNAME', 'admin')
         User = get_user_model()
-
         try:
-            return User.objects.get(username='admin')
+            return User.objects.get(username=username)
         except User.DoesNotExist as exc:
-            raise ValueError(_('Service user "admin" does not exist')) from exc
+            raise ValueError(
+                _('Service user "%(user)s" does not exist') % {'user': username}
+            ) from exc

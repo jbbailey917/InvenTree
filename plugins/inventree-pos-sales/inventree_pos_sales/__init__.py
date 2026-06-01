@@ -1,0 +1,1 @@
+"""InvenTree POS Sales Plugin."""
