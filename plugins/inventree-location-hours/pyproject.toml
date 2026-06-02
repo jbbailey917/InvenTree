@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inventree-location-hours"
+version = "0.1.0"
+description = "Track operating hours per stock location and push updates to external webhooks"
+authors = [{ name = "Jordan Bailey" }]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["inventree_location_hours*"]
+
+[project.entry-points."inventree_plugins"]
+location_hours = "inventree_location_hours.core:LocationHoursPlugin"
