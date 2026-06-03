@@ -22,33 +22,26 @@ from InvenTree.mixins import CreateAPI
 from order import models, serializers
 from order.status_codes import SalesOrderStatus, SalesOrderStatusGroups
 from part.models import Part
-from plugin.models import PluginConfig
 
 from . import serializers as plugin_serializers
+from .models import POSTerminal
 
 logger = structlog.get_logger('inventree')
-
-
-def _get_plugin_settings() -> dict:
-    """Retrieve settings from the POS Sales plugin config."""
-    cfg = PluginConfig.objects.filter(key='pos-sales', active=True).first()
-    if cfg is None:
-        return {}
-    return cfg.plugin_settings
 
 
 class PosSalesOrchestrator:
     """Runs the sales-order workflow using InvenTree models and serializers."""
 
-    def __init__(self, user: User):
-        """Initialize the orchestrator with a service user."""
+    def __init__(
+        self, user: User, receipt_api_endpoint: str = '', receipt_api_key: str = ''
+    ):
+        """Initialize the orchestrator with a service user and terminal config."""
         self.user = user
+        self.receipt_api_endpoint = receipt_api_endpoint
+        self.receipt_api_key = receipt_api_key
         self.request_context = {'request': _FakeRequest(user)}
-        settings = _get_plugin_settings()
-        self.receipt_api_endpoint = settings.get('RECEIPT_API_ENDPOINT', '')
-        self.receipt_api_key = settings.get('RECEIPT_API_KEY', '')
 
-    def process_sale(self, receipt_id: str, location_id: str) -> models.SalesOrder:
+    def process_sale(self, receipt_id: str, terminal: POSTerminal) -> models.SalesOrder:
         """End-to-end POS sale processing.
 
         Workflow (InvenTree-recommended order):
@@ -56,8 +49,12 @@ class PosSalesOrchestrator:
         complete shipment (async) → ship order → complete order.
         """
         line_specs = self._parse_receipt_lines(receipt_id)
-        customer = self._get_or_create_location_customer(location_id)
-        stock_location = self._resolve_stock_location(location_id)
+        customer = terminal.customer or self._get_or_create_customer(
+            terminal.terminal_id
+        )
+        stock_location = terminal.location or self._resolve_stock_location(
+            terminal.terminal_id
+        )
 
         sales_order = self._get_or_create_sales_order(receipt_id, customer)
 
@@ -85,12 +82,10 @@ class PosSalesOrchestrator:
         sales_order.refresh_from_db()
         return sales_order
 
-    def _get_or_create_location_customer(
-        self, location_id: str
-    ) -> company_models.Company:
-        """Each POS location maps to a dedicated InvenTree customer company."""
+    def _get_or_create_customer(self, terminal_id: str) -> company_models.Company:
+        """Each POS terminal maps to a dedicated InvenTree customer company."""
         prefix = 'POS Location'
-        name = f'{prefix} {location_id}'
+        name = f'{prefix} {terminal_id}'
 
         customer = company_models.Company.objects.filter(
             name=name, is_customer=True
@@ -101,13 +96,13 @@ class PosSalesOrchestrator:
 
         customer = company_models.Company.objects.create(
             name=name,
-            description=f'Auto-created for POS location_id={location_id}',
+            description=f'Auto-created for POS terminal_id={terminal_id}',
             is_customer=True,
             is_supplier=False,
             active=True,
         )
         logger.info(
-            'Created POS customer', location_id=location_id, customer_pk=customer.pk
+            'Created POS customer', terminal_id=terminal_id, customer_pk=customer.pk
         )
         return customer
 
@@ -403,16 +398,28 @@ class PosSalesWebhook(CreateAPI):
     def create(self, request, *args, **kwargs):
         """Process incoming POS webhook and orchestrate sales order creation."""
         try:
-            receipt_id, location_id = self._parse_inbound_webhook(request.data)
+            receipt_id, terminal_id = self._parse_inbound_webhook(request.data)
         except ValueError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        terminal = POSTerminal.objects.filter(
+            terminal_id=terminal_id, active=True
+        ).first()
+        if terminal is None:
+            return Response(
+                {
+                    'detail': _('Unknown or inactive terminal: %(id)s')
+                    % {'id': terminal_id}
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
         logger.info(
-            'POS webhook received', receipt_id=receipt_id, location_id=location_id
+            'POS webhook received', receipt_id=receipt_id, terminal_id=terminal_id
         )
 
         try:
-            user = self._get_service_user()
+            user = self._get_service_user(terminal.service_username)
         except Exception as exc:
             logger.exception('POS service user misconfigured')
             return Response(
@@ -420,8 +427,12 @@ class PosSalesWebhook(CreateAPI):
             )
 
         try:
-            orchestrator = PosSalesOrchestrator(user)
-            sales_order = orchestrator.process_sale(receipt_id, location_id)
+            orchestrator = PosSalesOrchestrator(
+                user=user,
+                receipt_api_endpoint=terminal.receipt_api_endpoint,
+                receipt_api_key=terminal.get_api_key(),
+            )
+            sales_order = orchestrator.process_sale(receipt_id, terminal)
         except (ValueError, DRFValidationError) as exc:
             logger.warning('POS sale rejected', error=str(exc))
             detail = exc.detail if isinstance(exc, DRFValidationError) else str(exc)
@@ -435,7 +446,7 @@ class PosSalesWebhook(CreateAPI):
         payload = {
             'success': True,
             'receipt_id': receipt_id,
-            'location_id': location_id,
+            'terminal_id': terminal_id,
             'sales_order_id': sales_order.pk,
             'sales_order_reference': sales_order.reference,
             'message': _('POS sale processed successfully'),
@@ -444,22 +455,20 @@ class PosSalesWebhook(CreateAPI):
 
     @staticmethod
     def _parse_inbound_webhook(data: dict) -> tuple[str, str]:
-        """Extract receipt and location identifiers from the inbound webhook body."""
+        """Extract receipt and terminal identifiers from the inbound webhook body."""
         receipt_id = data.get('receipt_id') or data.get('id')
-        location_id = data.get('location_id') or data.get('location')
+        terminal_id = data.get('terminal_id')
 
         if not receipt_id:
             raise ValueError(_('Missing receipt_id in webhook payload'))
-        if not location_id:
-            raise ValueError(_('Missing location_id in webhook payload'))
+        if not terminal_id:
+            raise ValueError(_('Missing terminal_id in webhook payload'))
 
-        return str(receipt_id), str(location_id)
+        return str(receipt_id), str(terminal_id)
 
     @staticmethod
-    def _get_service_user() -> User:
+    def _get_service_user(username: str = 'admin') -> User:
         """Return the configured service account."""
-        settings = _get_plugin_settings()
-        username = settings.get('SERVICE_USERNAME', 'admin')
         User = get_user_model()
         try:
             return User.objects.get(username=username)

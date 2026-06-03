@@ -1,12 +1,12 @@
 """POS Sales Plugin — core entry point."""
 
-from django.utils.translation import gettext_lazy as _
-
 from plugin import InvenTreePlugin
-from plugin.mixins import SettingsMixin, UrlsMixin, UserInterfaceMixin
+from plugin.mixins import AppMixin, SettingsMixin, UrlsMixin, UserInterfaceMixin
 
 
-class PosSalesPlugin(SettingsMixin, UrlsMixin, UserInterfaceMixin, InvenTreePlugin):
+class PosSalesPlugin(
+    AppMixin, SettingsMixin, UrlsMixin, UserInterfaceMixin, InvenTreePlugin
+):
     """Plugin that automates sales order workflow from POS webhook events."""
 
     NAME = 'POS Sales'
@@ -17,35 +17,39 @@ class PosSalesPlugin(SettingsMixin, UrlsMixin, UserInterfaceMixin, InvenTreePlug
     )
     VERSION = '0.1.0'
 
-    SETTINGS = {
-        'RECEIPT_API_ENDPOINT': {
-            'name': _('Receipt API Endpoint'),
-            'description': _('External POS API URL that returns receipt line items'),
-            'required': True,
-        },
-        'RECEIPT_API_KEY': {
-            'name': _('Receipt API Key'),
-            'description': _(
-                'Bearer token for authenticating with the POS receipt API'
-            ),
-            'protected': True,
-        },
-        'SERVICE_USERNAME': {
-            'name': _('Service User'),
-            'description': _(
-                'InvenTree user account used to create orders (defaults to admin)'
-            ),
-            'default': 'admin',
-        },
-    }
-
     def setup_urls(self):
-        """Register the POS webhook endpoint."""
+        """Register the POS webhook and terminal API endpoints."""
         from django.urls import path
 
         from .pos_webhook import PosSalesWebhook
+        from .terminals import (
+            ApiKeyDetail,
+            ApiKeyListCreate,
+            ApiKeyReveal,
+            TerminalApiKeyDetail,
+            TerminalDetail,
+            TerminalListCreate,
+        )
 
-        return [path('pos-webhook/', PosSalesWebhook.as_view(), name='pos-webhook')]
+        return [
+            path('pos-webhook/', PosSalesWebhook.as_view(), name='pos-webhook'),
+            path('terminals/', TerminalListCreate.as_view(), name='terminal-list'),
+            path(
+                'terminals/<int:pk>/', TerminalDetail.as_view(), name='terminal-detail'
+            ),
+            path(
+                'terminals/<int:pk>/api-key/',
+                TerminalApiKeyDetail.as_view(),
+                name='terminal-api-key',
+            ),
+            path('api-keys/', ApiKeyListCreate.as_view(), name='api-key-list'),
+            path('api-keys/<int:pk>/', ApiKeyDetail.as_view(), name='api-key-detail'),
+            path(
+                'api-keys/<int:pk>/reveal/',
+                ApiKeyReveal.as_view(),
+                name='api-key-reveal',
+            ),
+        ]
 
     def get_ui_navigation_items(self, request, context, **kwargs):
         """Provide a navigation item for the POS sales page."""
@@ -55,7 +59,10 @@ class PosSalesPlugin(SettingsMixin, UrlsMixin, UserInterfaceMixin, InvenTreePlug
                 'title': 'POS Sales',
                 'icon': 'ti:receipt:outline',
                 'options': {'url': '/web/plugin/pos-sales/'},
-                'source': self.plugin_static_file('pos_dashboard.js:renderPage'),
+                'source': self.plugin_static_file('pos_dashboard.js')
+                + '?v='
+                + self.VERSION
+                + ':renderPage',
             }
         ]
 

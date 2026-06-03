@@ -44,7 +44,10 @@ class BulkScanPlugin(SettingsMixin, UrlsMixin, UserInterfaceMixin, InvenTreePlug
                 'title': 'Bulk Scan',
                 'icon': 'ti:qr-code:outline',
                 'options': {'url': '/web/plugin/bulk-scan/'},
-                'source': self.plugin_static_file('bulk_scan_page.js:renderPage'),
+                'source': self.plugin_static_file('bulk_scan_page.js')
+                + '?v='
+                + self.VERSION
+                + ':renderPage',
             }
         ]
 

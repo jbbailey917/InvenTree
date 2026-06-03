@@ -80,7 +80,10 @@ class LocationHoursPlugin(
                 'title': 'Location Hours',
                 'icon': 'ti:clock:outline',
                 'options': {'url': '/web/plugin/location-hours/overview/'},
-                'source': self.plugin_static_file('bulk_editor.js:renderPage'),
+                'source': self.plugin_static_file('bulk_editor.js')
+                + '?v='
+                + self.VERSION
+                + ':renderPage',
             }
         ]
 
