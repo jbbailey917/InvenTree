@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inventree-dimension-templates"
+version = "0.1.0"
+description = "Sets up Length/Width/Height/Volume parameter templates for parts"
+authors = [{ name = "Jordan Bailey" }]
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["inventree_dimension_templates*"]
+
+[project.entry-points."inventree_plugins"]
+dimension_templates = "inventree_dimension_templates.core:DimensionTemplatesPlugin"

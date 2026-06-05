@@ -370,7 +370,6 @@ class StockItemSerializer(
             'supplier_part',
             'SKU',
             'MPN',
-            'manufacturer_name',
             'barcode_hash',
             'updated',
             'stocktake_date',
@@ -577,13 +576,6 @@ class StockItemSerializer(
         source='supplier_part.manufacturer_part.MPN',
         read_only=True,
         label=_('Manufacturer Part Number'),
-        allow_null=True,
-    )
-
-    manufacturer_name = serializers.CharField(
-        source='supplier_part.manufacturer_part.manufacturer.name',
-        read_only=True,
-        label=_('Manufacturer'),
         allow_null=True,
     )
 

@@ -44,7 +44,10 @@
       "Bash(echo \"exit: $?\")",
       "Bash(git reset *)",
       "Bash(git commit *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(flutter --version)",
+      "Bash(dart --version)",
+      "Bash(git *)"
     ]
   }
 }

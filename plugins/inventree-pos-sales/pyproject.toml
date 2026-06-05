@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inventree-pos-sales"
+version = "0.1.0"
+description = "InvenTree plugin that automates sales order workflow from POS webhook events"
+authors = [{ name = "Jordan Bailey" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["inventree_pos_sales*"]
+
+[project.entry-points."inventree_plugins"]
+pos_sales = "inventree_pos_sales.core:PosSalesPlugin"

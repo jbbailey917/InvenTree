@@ -117,6 +117,10 @@ export const GroupDetail = Loadable(
   lazy(() => import('./pages/core/GroupDetail'))
 );
 
+export const PluginPage = Loadable(
+  lazy(() => import('./components/plugins/PluginPage'))
+);
+
 export const NotFound = Loadable(
   lazy(() => import('./components/errors/NotFound'))
 );
@@ -202,6 +206,7 @@ export const routes = (
         <Route path='user/:id/*' element={<UserDetail />} />
         <Route path='group/:id/*' element={<GroupDetail />} />
       </Route>
+      <Route path='plugin/*' element={<PluginPage />} />
     </Route>
     <Route
       path='/'

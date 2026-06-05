@@ -17,13 +17,11 @@ import { InvenTreeTable } from '../InvenTreeTable';
 export default function BarcodeScanTable({
   records,
   onItemsSelected,
-  onItemsDeleted,
-  clearSelectionToken
+  onItemsDeleted
 }: {
   records: BarcodeScanItem[];
   onItemsSelected: (items: string[]) => void;
   onItemsDeleted: (items: string[]) => void;
-  clearSelectionToken?: number;
 }) {
   const navigate = useNavigate();
   const user = useUserState();
@@ -104,12 +102,6 @@ export default function BarcodeScanTable({
   useEffect(() => {
     onItemsSelected(table.selectedIds);
   }, [table.selectedIds]);
-
-  useEffect(() => {
-    if (clearSelectionToken) {
-      table.clearSelectedRecords();
-    }
-  }, [clearSelectionToken]);
 
   return (
     <>

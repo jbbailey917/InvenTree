@@ -1,0 +1,1 @@
+"""InvenTree Bulk Scan Plugin."""
