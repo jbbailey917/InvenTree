@@ -31,6 +31,9 @@ class POSTerminalSerializer(serializers.ModelSerializer):
     location_name = serializers.CharField(source='location.name', read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     api_key = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    key_source = serializers.CharField(
+        write_only=True, required=False, allow_blank=True
+    )
 
     class Meta:
         """Meta options."""
@@ -46,14 +49,39 @@ class POSTerminalSerializer(serializers.ModelSerializer):
             'customer_name',
             'receipt_api_endpoint',
             'api_key',
+            'key_source',
             'service_username',
             'active',
         ]
         read_only_fields = ['id']
 
+    @staticmethod
+    def _resolve_key_source(key_source):
+        """Resolve a key source reference to a plaintext key."""
+        if not key_source:
+            return None
+        if key_source.startswith('key:'):
+            try:
+                pk = int(key_source[4:])
+                key = PosApiKey.objects.get(pk=pk)
+                return key.get_key()
+            except (PosApiKey.DoesNotExist, ValueError):
+                return None
+        if key_source.startswith('term:'):
+            try:
+                pk = int(key_source[5:])
+                terminal = POSTerminal.objects.get(pk=pk)
+                return terminal.get_api_key()
+            except (POSTerminal.DoesNotExist, ValueError):
+                return None
+        return None
+
     def create(self, validated_data):
         """Create a terminal with encrypted API key."""
         api_key = validated_data.pop('api_key', None)
+        key_source = validated_data.pop('key_source', None)
+        if not api_key and key_source:
+            api_key = self._resolve_key_source(key_source)
         instance = super().create(validated_data)
         if api_key:
             instance.set_api_key(api_key)
@@ -63,6 +91,9 @@ class POSTerminalSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         """Update a terminal with encrypted API key."""
         api_key = validated_data.pop('api_key', None)
+        key_source = validated_data.pop('key_source', None)
+        if not api_key and key_source:
+            api_key = self._resolve_key_source(key_source)
         instance = super().update(instance, validated_data)
         if api_key is not None:
             instance.set_api_key(api_key)

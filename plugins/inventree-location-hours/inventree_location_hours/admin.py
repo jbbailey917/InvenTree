@@ -2,7 +2,21 @@
 
 from django.contrib import admin
 
-from .models import LocationHours, WebhookEndpoint, WebhookLog
+from .models import (
+    GoogleOAuthToken,
+    LocationApiKey,
+    LocationHours,
+    WebhookEndpoint,
+    WebhookLog,
+)
+
+# Unregister first to handle plugin reloads without crashing
+_models = [LocationHours, LocationApiKey, WebhookEndpoint, WebhookLog, GoogleOAuthToken]
+for _model in _models:
+    try:
+        admin.site.unregister(_model)
+    except admin.sites.NotRegistered:
+        pass
 
 
 @admin.register(LocationHours)
@@ -13,11 +27,20 @@ class LocationHoursAdmin(admin.ModelAdmin):
     list_filter = ['location', 'day']
 
 
+@admin.register(LocationApiKey)
+class LocationApiKeyAdmin(admin.ModelAdmin):
+    """Admin for LocationApiKey."""
+
+    list_display = ['name', 'description', 'created', 'updated']
+    search_fields = ['name', 'description']
+    readonly_fields = ['api_key', 'created', 'updated']
+
+
 @admin.register(WebhookEndpoint)
 class WebhookEndpointAdmin(admin.ModelAdmin):
     """Admin for WebhookEndpoint."""
 
-    list_display = ['name', 'event_type', 'trigger', 'active']
+    list_display = ['name', 'api_key_ref', 'event_type', 'trigger', 'active']
     list_filter = ['event_type', 'trigger', 'active']
 
 
@@ -37,3 +60,11 @@ class WebhookLogAdmin(admin.ModelAdmin):
         'response_body',
         'created_at',
     ]
+
+
+@admin.register(GoogleOAuthToken)
+class GoogleOAuthTokenAdmin(admin.ModelAdmin):
+    """Admin for GoogleOAuthToken."""
+
+    list_display = ['google_email', 'expires_at', 'created', 'updated']
+    readonly_fields = ['access_token', 'refresh_token', 'created', 'updated']

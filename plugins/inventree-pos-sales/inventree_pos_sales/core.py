@@ -25,8 +25,6 @@ class PosSalesPlugin(
         from .terminals import (
             ApiKeyDetail,
             ApiKeyListCreate,
-            ApiKeyReveal,
-            TerminalApiKeyDetail,
             TerminalDetail,
             TerminalListCreate,
         )
@@ -37,18 +35,8 @@ class PosSalesPlugin(
             path(
                 'terminals/<int:pk>/', TerminalDetail.as_view(), name='terminal-detail'
             ),
-            path(
-                'terminals/<int:pk>/api-key/',
-                TerminalApiKeyDetail.as_view(),
-                name='terminal-api-key',
-            ),
             path('api-keys/', ApiKeyListCreate.as_view(), name='api-key-list'),
             path('api-keys/<int:pk>/', ApiKeyDetail.as_view(), name='api-key-detail'),
-            path(
-                'api-keys/<int:pk>/reveal/',
-                ApiKeyReveal.as_view(),
-                name='api-key-reveal',
-            ),
         ]
 
     def get_ui_navigation_items(self, request, context, **kwargs):

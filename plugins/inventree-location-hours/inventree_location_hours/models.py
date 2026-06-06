@@ -61,6 +61,54 @@ class LocationHours(models.Model):
         return self.open_time is None or self.close_time is None
 
 
+class LocationApiKey(models.Model):
+    """A named API key stored encrypted for reuse across webhook endpoints."""
+
+    name = models.CharField(
+        max_length=200,
+        unique=True,
+        verbose_name=_('Name'),
+        help_text=_('Human-readable name for this key'),
+    )
+    description = models.CharField(
+        max_length=500, blank=True, verbose_name=_('Description')
+    )
+    api_key = models.TextField(
+        blank=True, verbose_name=_('API Key'), help_text=_('Encrypted at rest.')
+    )
+    created = models.DateTimeField(auto_now_add=True, verbose_name=_('Created'))
+    updated = models.DateTimeField(auto_now=True, verbose_name=_('Updated'))
+
+    class Meta:
+        """Meta options."""
+
+        app_label = 'inventree_location_hours'
+        verbose_name = _('Location API Key')
+        verbose_name_plural = _('Location API Keys')
+        ordering = ['name']
+
+    def __str__(self):
+        """String representation."""
+        return self.name
+
+    def set_key(self, plaintext):
+        """Encrypt and store an API key."""
+        if not plaintext:
+            self.api_key = ''
+            return
+        from .crypto import encrypt
+
+        self.api_key = encrypt(plaintext)
+
+    def get_key(self):
+        """Decrypt and return the stored API key."""
+        if not self.api_key:
+            return ''
+        from .crypto import decrypt
+
+        return decrypt(self.api_key)
+
+
 class WebhookEndpoint(models.Model):
     """Configurable webhook destination."""
 
@@ -91,13 +139,14 @@ class WebhookEndpoint(models.Model):
         default=TriggerType.MANUAL,
         verbose_name=_('Trigger'),
     )
-    secret_env_var = models.CharField(
-        max_length=100,
+    api_key_ref = models.ForeignKey(
+        LocationApiKey,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
-        verbose_name=_('Secret Env Variable'),
-        help_text=_(
-            'Name of environment variable holding the API key (never stored in DB)'
-        ),
+        related_name='webhook_endpoints',
+        verbose_name=_('API Key'),
+        help_text=_('Stored API key used to authenticate outgoing webhooks'),
     )
     config = models.JSONField(
         default=dict,
@@ -117,6 +166,73 @@ class WebhookEndpoint(models.Model):
     def __str__(self):
         """String representation."""
         return f'{self.name} ({self.event_type})'
+
+
+class GoogleOAuthToken(models.Model):
+    """Encrypted Google OAuth tokens for API authentication."""
+
+    access_token = models.TextField(
+        blank=True, verbose_name=_('Access Token'), help_text=_('Encrypted at rest.')
+    )
+    refresh_token = models.TextField(
+        blank=True, verbose_name=_('Refresh Token'), help_text=_('Encrypted at rest.')
+    )
+    google_email = models.CharField(
+        max_length=200,
+        blank=True,
+        verbose_name=_('Google Email'),
+        help_text=_('Email of the connected Google account'),
+    )
+    expires_at = models.DateTimeField(
+        null=True, blank=True, verbose_name=_('Expires At')
+    )
+    created = models.DateTimeField(auto_now_add=True, verbose_name=_('Created'))
+    updated = models.DateTimeField(auto_now=True, verbose_name=_('Updated'))
+
+    class Meta:
+        """Meta options."""
+
+        app_label = 'inventree_location_hours'
+        verbose_name = _('Google OAuth Token')
+        verbose_name_plural = _('Google OAuth Tokens')
+
+    def __str__(self):
+        """String representation."""
+        return self.google_email or f'Token {self.pk}'
+
+    def set_access_token(self, plaintext):
+        """Encrypt and store an access token."""
+        if not plaintext:
+            self.access_token = ''
+            return
+        from .crypto import encrypt
+
+        self.access_token = encrypt(plaintext)
+
+    def get_access_token(self):
+        """Decrypt and return the stored access token."""
+        if not self.access_token:
+            return ''
+        from .crypto import decrypt
+
+        return decrypt(self.access_token)
+
+    def set_refresh_token(self, plaintext):
+        """Encrypt and store a refresh token."""
+        if not plaintext:
+            self.refresh_token = ''
+            return
+        from .crypto import encrypt
+
+        self.refresh_token = encrypt(plaintext)
+
+    def get_refresh_token(self):
+        """Decrypt and return the stored refresh token."""
+        if not self.refresh_token:
+            return ''
+        from .crypto import decrypt
+
+        return decrypt(self.refresh_token)
 
 
 class WebhookLog(models.Model):

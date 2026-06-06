@@ -29,6 +29,19 @@ class LocationHoursPlugin(
             'description': _('Google Business account ID (e.g. accounts/123)'),
             'default': '',
         },
+        'GOOGLE_OAUTH_CLIENT_ID': {
+            'name': _('Google OAuth Client ID'),
+            'description': _(
+                'From Google API Console → Credentials → OAuth 2.0 Client ID. '
+                'Required for the Connect Google button.'
+            ),
+            'default': '',
+        },
+        'GOOGLE_OAUTH_CLIENT_SECRET': {
+            'name': _('Google OAuth Client Secret'),
+            'description': _('OAuth client secret from Google API Console.'),
+            'default': '',
+        },
         'DEFAULT_TIMEZONE': {
             'name': _('Default Timezone'),
             'description': _('IANA timezone for location hours (e.g. America/Chicago)'),
@@ -41,6 +54,12 @@ class LocationHoursPlugin(
         from django.urls import path
 
         from .api import (
+            ApiKeyDetail,
+            ApiKeyListCreate,
+            GoogleAuthBegin,
+            GoogleAuthCallback,
+            GoogleAuthStatus,
+            GoogleDisconnect,
             LocationHoursBulkUpdate,
             LocationHoursDetail,
             LocationHoursListCreate,
@@ -70,6 +89,24 @@ class LocationHoursPlugin(
                 name='endpoint-detail',
             ),
             path('logs/', WebhookLogList.as_view(), name='log-list'),
+            path('api-keys/', ApiKeyListCreate.as_view(), name='api-key-list'),
+            path('api-keys/<int:pk>/', ApiKeyDetail.as_view(), name='api-key-detail'),
+            path('google-auth/', GoogleAuthBegin.as_view(), name='google-auth-begin'),
+            path(
+                'google-auth/callback/',
+                GoogleAuthCallback.as_view(),
+                name='google-auth-callback',
+            ),
+            path(
+                'google-auth/status/',
+                GoogleAuthStatus.as_view(),
+                name='google-auth-status',
+            ),
+            path(
+                'google-disconnect/',
+                GoogleDisconnect.as_view(),
+                name='google-disconnect',
+            ),
         ]
 
     def get_ui_navigation_items(self, request, context, **kwargs):

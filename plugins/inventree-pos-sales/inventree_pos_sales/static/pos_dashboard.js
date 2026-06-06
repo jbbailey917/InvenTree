@@ -148,10 +148,6 @@ async function deleteTerminal(pk) {
   return apiFetch(BASE + pk + '/', { method: 'DELETE' });
 }
 
-async function fetchTerminalApiKey(pk) {
-  return apiFetch(BASE + pk + '/api-key/');
-}
-
 /* ──────────────────────────────────────── API Key store CRUD ─── */
 
 var KEYS_BASE = '/plugin/pos-sales/api-keys/';
@@ -170,10 +166,6 @@ async function updateApiKey(pk, data) {
 
 async function deleteApiKey(pk) {
   return apiFetch(KEYS_BASE + pk + '/', { method: 'DELETE' });
-}
-
-async function revealApiKey(pk) {
-  return apiFetch(KEYS_BASE + pk + '/reveal/');
 }
 
 /* ────────────────────────────────────── Dropdown data sources ─── */
@@ -314,12 +306,11 @@ function terminalFormFields(terminal, locations, customers, allTerminals, allSav
     '<input name="receipt_api_endpoint" value="' + escapeHtml(t.receipt_api_endpoint || '') + '" ' +
     'style="width:100%;padding:8px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px;box-sizing:border-box;"></div>' +
 
-    /* API Key (select from saved keys) */
+    /* API Key (select from saved keys — resolved server-side) */
     '<div><label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:3px;">API Key</label>' +
-    '<select name="copy_key_from" class="pos-copy-key-from" ' +
+    '<select name="key_source" ' +
     'style="width:100%;padding:8px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px;background:#fff;box-sizing:border-box;color:#555;">' +
-    copyKeyOpts + '</select>' +
-    '<input name="api_key" type="hidden" value=""></div>' +
+    copyKeyOpts + '</select></div>' +
 
     /* Service User */
     '<div><label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:3px;">Service User</label>' +
@@ -352,31 +343,6 @@ function openTerminalModal(terminal, locations, customers, allTerminals, allSave
   var body = terminalFormFields(terminal, locations, customers, allTerminals, allSavedKeys);
   var ov = showModal(modalBox(title, body, false));
 
-  /* Wire up "Copy key from" dropdown */
-  var copySelect = ov.querySelector('.pos-copy-key-from');
-  if (copySelect) {
-    copySelect.onchange = async function () {
-      var val = copySelect.value;
-      if (!val) return;
-      var apiKeyInput = ov.querySelector('[name="api_key"]');
-      if (!apiKeyInput) return;
-      try {
-        var result;
-        if (val.startsWith('key:')) {
-          result = await revealApiKey(val.slice(4));
-        } else if (val.startsWith('term:')) {
-          result = await fetchTerminalApiKey(val.slice(5));
-        } else {
-          return;
-        }
-        apiKeyInput.value = result.api_key || '';
-        showToast('API key copied', 'success');
-      } catch (err) {
-        showToast('Failed to fetch API key: ' + err.message, 'error');
-      }
-    };
-  }
-
   ov.querySelector('.pos-btn-cancel').onclick = function () { closeModal(ov); };
   ov.querySelector('.pos-btn-save').onclick = async function () {
     var fields = ov.querySelectorAll('[name]');
@@ -395,7 +361,7 @@ function openTerminalModal(terminal, locations, customers, allTerminals, allSave
     /* Remove empty-ish strings for optional fields */
     if (!data.location) data.location = null;
     if (!data.customer) data.customer = null;
-    if (!data.api_key) delete data.api_key;
+    if (!data.key_source) delete data.key_source;
 
     var saveBtn = ov.querySelector('.pos-btn-save');
     var origText = saveBtn.textContent;
@@ -438,9 +404,6 @@ function apiKeyRow(k, index) {
     '<div style="color:#888;font-size:11px;">' + created + '</div>' +
 
     '<div style="display:flex;gap:4px;justify-content:flex-end;">' +
-    '<button data-id="' + k.id + '" class="pos-key-reveal" ' +
-    'style="padding:4px 8px;border:1px solid #d0d0d0;background:#fff;border-radius:4px;' +
-    'cursor:pointer;font-size:11px;color:#555;" title="Copy key to clipboard">&#x2398;</button>' +
     '<button data-id="' + k.id + '" class="pos-key-edit" ' +
     'style="padding:4px 10px;border:1px solid #d0d0d0;background:#fff;border-radius:4px;' +
     'cursor:pointer;font-size:11px;color:#444;">Edit</button>' +
@@ -556,29 +519,6 @@ async function renderApiKeyList() {
     }
 
     container.innerHTML = html;
-
-    /* Wire reveal buttons */
-    var reveals = container.querySelectorAll('.pos-key-reveal');
-    for (var r = 0; r < reveals.length; r++) {
-      reveals[r].onclick = (function (pk) {
-        return async function () {
-          try {
-            var result = await revealApiKey(pk);
-            var ta = document.createElement('textarea');
-            ta.value = result.api_key || '';
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            document.body.removeChild(ta);
-            showToast('API key copied to clipboard', 'success');
-          } catch (err) {
-            showToast('Failed to reveal key: ' + err.message, 'error');
-          }
-        };
-      })(reveals[r].getAttribute('data-id'));
-    }
 
     /* Wire edit buttons */
     var edits = container.querySelectorAll('.pos-key-edit');

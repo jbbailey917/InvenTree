@@ -1,7 +1,9 @@
 """Webhook dispatch logic."""
 
 import json
-import os
+from datetime import timedelta
+
+from django.utils import timezone
 
 import requests
 import structlog
@@ -9,6 +11,61 @@ import structlog
 from .models import WebhookLog
 
 logger = structlog.get_logger('inventree')
+
+GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+
+
+def _get_push_url(account_id, location_id):
+    """Return the Google Business Information API URL."""
+    return (
+        'https://mybusinessbusinessinformation.googleapis.com/v1/'
+        f'accounts/{account_id}/locations/{location_id}'
+    )
+
+
+def _get_fresh_access_token():
+    """Return a valid access token, refreshing if necessary."""
+    from .api import _get_oauth_client_config
+    from .models import GoogleOAuthToken
+
+    token = GoogleOAuthToken.objects.filter(pk=1).first()
+    if not token:
+        return None
+
+    # If still valid, return existing
+    if token.expires_at and token.expires_at > timezone.now() + timedelta(minutes=2):
+        return token.get_access_token()
+
+    # Need to refresh
+    refresh = token.get_refresh_token()
+    if not refresh:
+        return token.get_access_token()  # Return even if expired — will fail with 401
+
+    client_id, client_secret = _get_oauth_client_config()
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        resp = requests.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'refresh_token': refresh,
+                'grant_type': 'refresh_token',
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        logger.exception('google_token_refresh_failed')
+        return token.get_access_token()  # Fall back to possibly-expired token
+
+    token.set_access_token(data['access_token'])
+    token.expires_at = timezone.now() + timedelta(seconds=data.get('expires_in', 3600))
+    token.save(update_fields=['access_token', 'expires_at'])
+    return data['access_token']
 
 
 def dispatch_webhooks(location, hours, endpoints):
@@ -25,14 +82,21 @@ def dispatch_webhooks(location, hours, endpoints):
 
 def _send_webhook(location, hours, endpoint):
     """Send a single webhook and log the result."""
-    from .api import (
-        _build_hours_payload,
-    )  # deferred import to break circular dependency
+    from .api import _build_hours_payload, _get_plugin_setting
 
-    api_key = (
-        os.environ.get(endpoint.secret_env_var, '') if endpoint.secret_env_var else ''
+    # Try OAuth token first, then fall back to stored API key
+    api_key = _get_fresh_access_token()
+    if not api_key:
+        api_key = endpoint.api_key_ref.get_key() if endpoint.api_key_ref else ''
+
+    account_id = _get_plugin_setting('GOOGLE_ACCOUNT_ID', '')
+    push_url = (
+        _get_push_url(account_id, str(location.pk))
+        if account_id
+        else endpoint.url.replace('{location_id}', str(location.pk))
     )
-    url = endpoint.url.replace('{location_id}', str(location.pk))
+
+    url = push_url
     payload = _build_hours_payload(location, hours, endpoint)
     body = json.dumps(payload)
     headers = {'Content-Type': 'application/json'}

@@ -30,18 +30,235 @@ function _toast(msg, type) {
   setTimeout(function() { el.remove(); }, 3000);
 }
 
+/* ─── Modal helpers ─── */
+
+function _modal(title, bodyHtml) {
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;z-index:9999;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,Roboto,sans-serif;';
+  overlay.innerHTML = '<div style="background:#fff;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,0.18);width:460px;max-width:94vw;max-height:90vh;overflow-y:auto;">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px 0 20px;">' +
+    '<h2 style="margin:0;font-size:17px;font-weight:600;color:#1a1a1a;">' + _esc(title) + '</h2>' +
+    '<button class="lh-modal-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;padding:0;line-height:1">&times;</button></div>' +
+    '<div style="padding:12px 20px 20px 20px;">' + bodyHtml + '</div></div>';
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay || e.target.closest('.lh-modal-close')) { overlay.remove(); }
+  });
+  return overlay;
+}
+
+/* ─── API Key Store CRUD ─── */
+
+function _apiKeyRow(k) {
+  return '<div style="display:grid;grid-template-columns:1fr 1fr 80px;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #eee;font-size:12px;">' +
+    '<div><div style="font-weight:600;color:#1a1a1a;">' + _esc(k.name) + '</div></div>' +
+    '<div style="color:#888;">' + _esc(k.description || '—') + '</div>' +
+    '<div style="display:flex;gap:4px;justify-content:flex-end;">' +
+    '<button data-id="' + k.id + '" class="lh-key-edit" style="padding:3px 8px;border:1px solid #d0d0d0;background:#fff;border-radius:4px;cursor:pointer;font-size:11px;color:#444;">Edit</button>' +
+    '<button data-id="' + k.id + '" class="lh-key-delete" style="padding:3px 8px;border:1px solid #e0e0e0;background:#fff;border-radius:4px;cursor:pointer;font-size:11px;color:#b71c1c;">Del</button></div></div>';
+}
+
+function _keyForm(key) {
+  var k = key || {};
+  return '<div style="display:flex;flex-direction:column;gap:10px;">' +
+    '<div><label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:2px;">Name</label>' +
+    '<input name="name" value="' + _esc(k.name || '') + '" style="width:100%;padding:7px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px;box-sizing:border-box;"></div>' +
+    '<div><label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:2px;">Description</label>' +
+    '<input name="description" value="' + _esc(k.description || '') + '" style="width:100%;padding:7px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px;box-sizing:border-box;"></div>' +
+    '<div><label style="display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:2px;">API Key</label>' +
+    '<input name="api_key" type="password" value="" placeholder="' + (k.id ? 'Leave blank to keep existing' : '') + '" style="width:100%;padding:7px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px;box-sizing:border-box;"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+    '<button class="lh-btn-cancel" style="padding:7px 16px;border:1px solid #d0d0d0;background:#fff;border-radius:6px;cursor:pointer;font-size:13px;color:#444;">Cancel</button>' +
+    '<button class="lh-btn-save" style="padding:7px 16px;border:none;background:#1565c0;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;font-weight:600;">Save</button></div></div>';
+}
+
+function _openKeyModal(key) {
+  var isEdit = !!key;
+  var ov = _modal(isEdit ? 'Edit API Key' : 'Add API Key', _keyForm(key));
+  ov.querySelector('.lh-btn-cancel').onclick = function() { ov.remove(); };
+  ov.querySelector('.lh-btn-save').onclick = async function() {
+    var fields = ov.querySelectorAll('[name]');
+    var data = {};
+    for (var i = 0; i < fields.length; i++) { data[fields[i].name] = fields[i].value; }
+    if (!data.api_key) delete data.api_key;
+    var btn = ov.querySelector('.lh-btn-save');
+    btn.textContent = 'Saving...'; btn.disabled = true;
+    try {
+      if (isEdit) {
+        await _fetch('/plugin/location-hours/api-keys/' + key.id + '/', { method: 'PUT', body: data });
+      } else {
+        await _fetch('/plugin/location-hours/api-keys/', { method: 'POST', body: data });
+      }
+      ov.remove();
+      _renderApiKeys();
+      _refreshKeyOptions();
+      _toast('API key ' + (isEdit ? 'updated' : 'created'), 'success');
+    } catch (err) {
+      _toast('Error: ' + (err.message || err), 'error');
+      btn.textContent = 'Save'; btn.disabled = false;
+    }
+  };
+}
+
+var _apiKeyCache = [];
+
+function _refreshKeyOptions() {
+  return _fetch('/plugin/location-hours/api-keys/').then(function(keys) {
+    _apiKeyCache = (keys.results || keys) || [];
+  });
+}
+
+async function _renderApiKeys() {
+  var container = document.getElementById('lh-apikey-section-body');
+  if (!container) return;
+  container.innerHTML = '<div style="text-align:center;padding:16px;color:#999;font-size:12px;">Loading...</div>';
+  try {
+    var keys = await _fetch('/plugin/location-hours/api-keys/');
+    var list = (keys.results || keys) || [];
+    _apiKeyCache = list;
+    var html = '';
+    if (list.length === 0) {
+      html = '<div style="text-align:center;padding:16px;color:#888;font-size:12px;">No API keys stored yet. Add one to enable push.</div>';
+    } else {
+      for (var i = 0; i < list.length; i++) { html += _apiKeyRow(list[i]); }
+    }
+    container.innerHTML = html;
+
+    var edits = container.querySelectorAll('.lh-key-edit');
+    for (var e = 0; e < edits.length; e++) {
+      edits[e].onclick = (function(id) { return function() {
+        var k = _apiKeyCache.find(function(x) { return String(x.id) === String(id); });
+        if (k) _openKeyModal(k);
+      }; })(edits[e].getAttribute('data-id'));
+    }
+    var dels = container.querySelectorAll('.lh-key-delete');
+    for (var d = 0; d < dels.length; d++) {
+      dels[d].onclick = (function(id) { return async function() {
+        if (!confirm('Delete this API key? It will stop working for any push destinations using it.')) return;
+        try {
+          await _fetch('/plugin/location-hours/api-keys/' + id + '/', { method: 'DELETE' });
+          _toast('API key deleted', 'success');
+          _renderApiKeys();
+          _refreshKeyOptions();
+        } catch (err) { _toast('Error: ' + (err.message || err), 'error'); }
+      }; })(dels[d].getAttribute('data-id'));
+    }
+  } catch (err) {
+    container.innerHTML = '<div style="color:#c62828;padding:8px;font-size:12px;">Failed: ' + _esc(err.message) + '</div>';
+  }
+}
+
+/* ─── Google connection bar ─── */
+
+function _googleBar() {
+  return '<div id="lh-google-bar" style="margin-bottom:16px;padding:10px 14px;border:1px solid #e0e0e0;border-radius:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;">' +
+    '<span style="font-weight:600;color:#333;white-space:nowrap;">Google:</span>' +
+    '<span id="lh-google-status" style="color:#888;">Checking...</span>' +
+    '<button id="lh-google-connect" style="padding:6px 16px;border:none;background:#1565c0;border-radius:6px;cursor:pointer;font-size:13px;color:#fff;font-weight:600;white-space:nowrap;display:none;">Connect Google</button>' +
+    '<button id="lh-google-disconnect" style="padding:6px 16px;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:13px;color:#888;background:#fff;white-space:nowrap;display:none;">Disconnect</button></div>';
+}
+
+function _loadGoogleStatus() {
+  var urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('oauth') === 'connected') {
+    _toast('Google account connected', 'success');
+    window.history.replaceState({}, '', window.location.pathname);
+  } else if (urlParams.get('oauth') === 'denied') {
+    _toast('Google authorization was denied', 'error');
+    window.history.replaceState({}, '', window.location.pathname);
+  } else if (urlParams.get('oauth') === 'error') {
+    _toast('Failed to connect Google account', 'error');
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+
+  _fetch('/plugin/location-hours/google-auth/status/').then(function(data) {
+    var status = document.getElementById('lh-google-status');
+    var connectBtn = document.getElementById('lh-google-connect');
+    var disconBtn = document.getElementById('lh-google-disconnect');
+
+    if (data.connected) {
+      status.textContent = 'Connected as ' + (data.email || 'unknown');
+      status.style.color = '#2e7d32';
+      connectBtn.style.display = 'none';
+      disconBtn.style.display = '';
+    } else {
+      status.textContent = 'Not connected';
+      status.style.color = '#888';
+      connectBtn.style.display = '';
+      disconBtn.style.display = 'none';
+    }
+  }).catch(function() {
+    document.getElementById('lh-google-status').textContent = 'Could not check status';
+  });
+}
+
+/* ─── Collapsible section ─── */
+
+function _section(id, title, addLabel, helpUrl) {
+  var helpLink = '';
+  if (helpUrl) {
+    helpLink = '<a href="' + helpUrl + '" target="_blank" rel="noopener" title="Setup help" style="font-size:11px;color:#1565c0;text-decoration:none;margin-right:12px;">How to get a token &nearr;</a>';
+  }
+  return '<div style="margin-bottom:16px;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">' +
+    '<div class="lh-section-hdr" data-section="' + id + '" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#fafafa;cursor:pointer;border-bottom:1px solid #e0e0e0;">' +
+    '<span style="font-weight:600;font-size:14px;">' + _esc(title) + '</span>' +
+    '<span style="display:flex;align-items:center;gap:4px;">' + helpLink + '<span style="font-size:18px;color:#888;" class="lh-section-arrow">&#x25BC;</span></span></div>' +
+    '<div id="' + id + '" style="padding:0;"></div>' +
+    '<div style="padding:8px 14px;border-top:1px solid #f0f0f0;">' +
+    '<button id="' + id + '-add" style="padding:5px 14px;border:none;background:#1565c0;border-radius:4px;cursor:pointer;font-size:12px;color:#fff;font-weight:600;">+ ' + _esc(addLabel) + '</button></div></div>';
+}
+
 /* ---- main ---- */
 
 export function renderPage(element, context) {
-  element.innerHTML = '<div id="lh-bulk-root" style="padding:16px;font-family:-apple-system,BlinkMacSystemFont,Roboto,sans-serif"><div style="text-align:center;padding:32px;color:#888">Loading locations...</div></div>';
+  element.innerHTML = '<div id="lh-bulk-root" style="padding:16px;font-family:-apple-system,BlinkMacSystemFont,Roboto,sans-serif">' +
+    _section('lh-apikey-section-body', 'API Keys', 'Add Key', 'https://developers.google.com/my-business/content/basic-setup') +
+    _googleBar() +
+    '<div id="lh-grid-area"><div style="text-align:center;padding:32px;color:#888">Loading locations...</div></div></div>';
   var root = element.querySelector('#lh-bulk-root');
+
+  /* Wire collapsible section */
+  var hdrs = root.querySelectorAll('.lh-section-hdr');
+  for (var h = 0; h < hdrs.length; h++) {
+    hdrs[h].addEventListener('click', function() {
+      var body = document.getElementById(this.dataset.section);
+      if (body) {
+        var hidden = body.style.display === 'none';
+        body.style.display = hidden ? 'block' : 'none';
+        this.querySelector('.lh-section-arrow').textContent = hidden ? '▼' : '▶';
+      }
+    });
+  }
+
+  /* Wire Add Key button */
+  document.getElementById('lh-apikey-section-body-add').addEventListener('click', function() { _openKeyModal(null); });
+
+  /* Wire Google connect / disconnect */
+  document.getElementById('lh-google-connect').addEventListener('click', function() {
+    window.location.href = '/plugin/location-hours/google-auth/';
+  });
+  document.getElementById('lh-google-disconnect').addEventListener('click', function() {
+    if (!confirm('Disconnect Google? You will need to re-connect before pushing hours.')) return;
+    _fetch('/plugin/location-hours/google-disconnect/', { method: 'POST' }).then(function() {
+      _loadGoogleStatus();
+      _toast('Google disconnected', 'success');
+    }).catch(function(err) {
+      _toast('Error: ' + (err.message || err), 'error');
+    });
+  });
+
+  /* Load keys and google status */
+  _refreshKeyOptions().then(function() {
+    _renderApiKeys();
+  });
+  _loadGoogleStatus();
 
   _fetch('/plugin/location-hours/hours/overview/').then(function(data) {
     var locations = data.locations || [];
     var googleAcct = data.google_account_id || '';
-    _renderGrid(root, locations, googleAcct);
+    _renderGrid(root.querySelector('#lh-grid-area'), locations, googleAcct);
   }).catch(function(err) {
-    root.innerHTML = '<div style="color:#c62828;padding:16px">Failed to load: ' + _esc(err.message || err) + '</div>';
+    root.querySelector('#lh-grid-area').innerHTML = '<div style="color:#c62828;padding:16px">Failed to load: ' + _esc(err.message || err) + '</div>';
   });
 }
 
@@ -55,18 +272,16 @@ function _renderGrid(root, locations, googleAcct) {
 
   var h = '';
 
-  /* google account id warning */
   if (!googleAcct) {
     h += '<div style="background:#fff3e0;border:1px solid #ffcc02;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px">';
     h += '<strong style="color:#e65100">Google Account ID not configured.</strong> ';
-    h += 'Set it in <em>Settings &rarr; Plugins &rarr; Location Hours Manager</em> to enable Google Location ID fields.';
+    h += 'Set it in <em>Settings → Plugins → Location Hours Manager</em> to enable Google Location ID fields.';
     h += '</div>';
   }
 
   h += '<h2 style="margin:0 0 4px;font-size:20px;font-weight:700">Location Hours</h2>';
-  h += '<p style="color:#666;font-size:13px;margin:0 0 16px">Click any hour cell to edit. Inline Google IDs save on blur.</p>';
+  h += '<p style="color:#666;font-size:13px;margin:0 0 16px">Click any hour cell to edit. Save the row, then push to send updates.</p>';
 
-  /* table */
   h += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">';
   h += '<thead><tr>';
   h += '<th style="padding:8px 10px;text-align:left;background:#fafafa;border-bottom:1px solid #e0e0e0;font-weight:600">Location</th>';
@@ -88,7 +303,6 @@ function _renderGrid(root, locations, googleAcct) {
       h += '<td class="lh-cell" style="padding:4px 6px;text-align:center;border-bottom:1px solid #f0f0f0;cursor:pointer;font-size:11px;background:' + bg + '" data-row="' + i + '" data-day="' + d + '">' + _esc(text) + '</td>';
     }
 
-    /* google location id */
     if (googleAcct) {
       var gid = loc.google_location_id || '';
       h += '<td style="padding:4px 6px;border-bottom:1px solid #f0f0f0"><input type="text" class="lh-gid-input" data-locpk="' + loc.location_pk + '" value="' + _esc(gid) + '" placeholder="locations/..." style="width:100%;padding:4px 6px;border:1px solid #ccc;border-radius:4px;font-size:11px"></td>';
@@ -102,7 +316,6 @@ function _renderGrid(root, locations, googleAcct) {
   }
   h += '</tbody></table></div>';
 
-  /* popup editor (same as before) */
   h += '<div id="lh-popup" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.3);z-index:9999;align-items:center;justify-content:center">';
   h += '<div style="background:#fff;border-radius:8px;padding:20px;min-width:280px;box-shadow:0 4px 20px rgba(0,0,0,.15)">';
   h += '<div style="font-weight:700;margin-bottom:12px" id="lh-popup-title"></div>';
@@ -118,7 +331,6 @@ function _renderGrid(root, locations, googleAcct) {
 
   var edits = {};
 
-  /* cell click -> popup */
   var cells = root.querySelectorAll('.lh-cell');
   for (var c = 0; c < cells.length; c++) {
     cells[c].addEventListener('click', function() {
@@ -158,7 +370,6 @@ function _renderGrid(root, locations, googleAcct) {
     document.getElementById('lh-popup').style.display = 'none';
   });
 
-  /* save per row */
   var saveBtns = root.querySelectorAll('.lh-save-row');
   for (var s = 0; s < saveBtns.length; s++) {
     saveBtns[s].addEventListener('click', function() {
@@ -202,7 +413,6 @@ function _renderGrid(root, locations, googleAcct) {
     });
   }
 
-  /* push per row */
   var pushBtns = root.querySelectorAll('.lh-push-row');
   for (var p = 0; p < pushBtns.length; p++) {
     pushBtns[p].addEventListener('click', function() {
@@ -217,7 +427,7 @@ function _renderGrid(root, locations, googleAcct) {
         for (var i = 0; i < (data.results || []).length; i++) {
           parts.push(data.results[i].webhook + ': ' + (data.results[i].success ? 'OK' : 'FAIL'));
         }
-        _toast(locName + ': ' + parts.join(', '), 'success');
+        _toast(locName + ': ' + (parts.length ? parts.join(', ') : 'No endpoints configured'), parts.length ? 'success' : 'error');
         btn.disabled = false;
         btn.textContent = 'Push';
       }).catch(function(err) {
@@ -228,7 +438,6 @@ function _renderGrid(root, locations, googleAcct) {
     });
   }
 
-  /* google location id auto-save on blur */
   if (googleAcct) {
     var gidInputs = root.querySelectorAll('.lh-gid-input');
     for (var g = 0; g < gidInputs.length; g++) {

@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 from rest_framework import serializers
 
-from .models import LocationHours, WebhookEndpoint, WebhookLog
+from .models import LocationApiKey, LocationHours, WebhookEndpoint, WebhookLog
 
 
 class LocationHoursSerializer(serializers.ModelSerializer):
@@ -58,8 +58,43 @@ class LocationHoursSerializer(serializers.ModelSerializer):
         return data
 
 
+class LocationApiKeySerializer(serializers.ModelSerializer):
+    """Serializer for LocationApiKey. API key value is write-only."""
+
+    api_key = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    class Meta:
+        """Meta options."""
+
+        model = LocationApiKey
+        fields = ['id', 'name', 'description', 'api_key', 'created', 'updated']
+        read_only_fields = ['id', 'created', 'updated']
+
+    def create(self, validated_data):
+        """Create an API key entry with encrypted value."""
+        key = validated_data.pop('api_key', None)
+        instance = super().create(validated_data)
+        if key:
+            instance.set_key(key)
+            instance.save(update_fields=['api_key'])
+        return instance
+
+    def update(self, instance, validated_data):
+        """Update an API key entry with encrypted value."""
+        key = validated_data.pop('api_key', None)
+        instance = super().update(instance, validated_data)
+        if key is not None:
+            instance.set_key(key)
+            instance.save(update_fields=['api_key'])
+        return instance
+
+
 class WebhookEndpointSerializer(serializers.ModelSerializer):
     """Serializer for WebhookEndpoint."""
+
+    api_key_ref_name = serializers.CharField(
+        source='api_key_ref.name', read_only=True, default=''
+    )
 
     class Meta:
         """Meta options."""
@@ -72,7 +107,8 @@ class WebhookEndpointSerializer(serializers.ModelSerializer):
             'url',
             'event_type',
             'trigger',
-            'secret_env_var',
+            'api_key_ref',
+            'api_key_ref_name',
             'config',
             'active',
         ]
